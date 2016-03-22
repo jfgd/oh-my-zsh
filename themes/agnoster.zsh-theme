@@ -104,12 +104,42 @@ prompt_git() {
     local LC_ALL="" LC_CTYPE="en_US.UTF-8"
     PL_BRANCH_CHAR=$'\ue0a0'         # 
   }
-  local ref dirty mode repo_path
+
+  local ref dirty mode repo_path dup
 
    if [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ]]; then
     repo_path=$(git rev-parse --git-dir 2>/dev/null)
     dirty=$(parse_git_dirty)
-    ref=$(git symbolic-ref HEAD 2> /dev/null) || ref="➦ $(git rev-parse --short HEAD 2> /dev/null)"
+    ref=$(git symbolic-ref HEAD 2> /dev/null) \
+	|| ref="➦ $(git describe --tags --exact-match HEAD 2> /dev/null)" \
+	|| ref="➦ $(git rev-parse --short HEAD 2> /dev/null)"
+    local branch_name=$ref[12,256]
+    local remote_name=$(git config branch.${branch_name}.remote)
+    if [[ $remote_name != "" ]]
+    then
+	local merge_name=$(git config branch.${branch_name}.merge)
+	if [[ $remote_name == "." ]]
+	then
+	    local remote_ref=$merge_name
+	else
+	    local remote_ref="refs/remotes/${remote_name}/${merge_name[12,256]}"
+	fi
+	revgit=$(git rev-list --left-right ${remote_ref}...HEAD)
+	if [[ $revgit != "" ]]
+	then
+	    behead=$(echo ${revgit} | wc -l)
+	    ahead=$(echo ${revgit} | grep '>' | wc -l)
+	    behind=$(( ${behead} - ${ahead}))
+	    if [[ ${behind} > 0 ]]
+	    then
+		dup="${dup}""↓${behind}"
+	    fi
+	    if [[ ${ahead} > 0 ]]
+	    then
+		dup="${dup}""↑${ahead}"
+	    fi
+	fi
+    fi
     if [[ -n $dirty ]]; then
       prompt_segment yellow black
     else
@@ -121,7 +151,42 @@ prompt_git() {
     elif [[ -e "${repo_path}/MERGE_HEAD" ]]; then
       mode=" >M<"
     elif [[ -e "${repo_path}/rebase" || -e "${repo_path}/rebase-apply" || -e "${repo_path}/rebase-merge" || -e "${repo_path}/../.dotest" ]]; then
-      mode=" >R>"
+	#mode=" >R>"
+	if [[ -e "${repo_path}/rebase-merge" ]]
+	then
+	    ref=$(cat "${repo_path}/rebase-merge/head-name")
+	    if [[ -e "${repo_path}/rebase-merge/interactive" ]]
+	    then
+		mode=" >R-i>"
+	    else
+		mode=" >R-m>"
+	    fi
+	    local step=$(cat ${repo_path}/rebase-merge/msgnum)
+	    local total=$(cat ${repo_path}/rebase-merge/end)
+	    mode="${mode} (${step}/${total})"
+	elif [[ -e "${repo_path}/rebase-apply" ]]
+	then
+	    local step total
+	    step=$(cat ${repo_path}/rebase-apply/next)
+	    total=$(cat ${repo_path}/rebase-apply/last)
+	    if [[ -e "${repo_path}/rebase-apply/rebasing" ]]
+	    then
+		ref=$(cat "${repo_path}/rebase-apply/head-name")
+		mode=" >R>"
+	    elif [[ -e "${repo_path}/rebase-apply/applying" ]]
+	    then
+		mode=" >AM>"
+	    else
+		mode=" (AM/REBASE)"
+	    fi
+	    mode="${mode} (${step}/${total})"
+	else
+	    mode=" >R>"
+	fi
+    elif [[ -e "${repo_path}/CHERRY_PICK_HEAD" ]]; then
+	mode=" (CHERRY-PICKING)"
+    elif [[ -e "${repo_path}/REVERT_HEAD" ]]; then
+	mode=" (REVERTING)"
     fi
 
     setopt promptsubst
@@ -135,7 +200,7 @@ prompt_git() {
     zstyle ':vcs_info:*' formats ' %u%c'
     zstyle ':vcs_info:*' actionformats ' %u%c'
     vcs_info
-    echo -n "${ref/refs\/heads\//$PL_BRANCH_CHAR }${vcs_info_msg_0_%% }${mode}"
+    echo -n "${ref/refs\/heads\//$PL_BRANCH_CHAR }${dup}${vcs_info_msg_0_%% }${mode}"
   fi
 }
 
